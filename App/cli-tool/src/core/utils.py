@@ -3,13 +3,22 @@ Utilities Module
 Handles Logging and Data Validation
 """
 import sys
-import magic
 import re
+import mimetypes
 from pathlib import Path
 from datetime import datetime
 from typing import Tuple, List, Dict
 from loguru import logger
 from config import settings
+
+# Attempt to load magic, fallback to standard mimetypes if libmagic is missing
+try:
+    import magic
+    # Check if libmagic loader works
+    magic.Magic(mime=True)
+    _has_magic = True
+except Exception:
+    _has_magic = False
 
 # --- Part 1: Logger ---
 
@@ -29,14 +38,33 @@ class ValidationError(Exception): pass
 class FileValidator:
     """Validate uploaded files"""
     AUDIO_FORMATS = {'audio/mpeg': ['.mp3'], 'audio/wav': ['.wav'], 'audio/x-wav': ['.wav'], 'audio/ogg': ['.ogg'], 'audio/flac': ['.flac'], 'audio/aac': ['.aac'], 'audio/m4a': ['.m4a', '.mp4'], 'audio/x-m4a': ['.m4a']} # Added .mp4 to m4a as commonly mislabeled
-    VIDEO_FORMATS = {'video/mp4': ['.mp4'], 'video/mpeg': ['.mpeg', '.mpg'], 'video/quicktime': ['.mov'], 'video/x-msvideo': ['.avi'], 'video/x-matroska': ['.mkv'], 'video/webm': ['.webm']}
+    VIDEO_FORMATS = {'video/mp4': ['.mp4','.m4a'], 'video/mpeg': ['.mpeg', '.mpg'], 'video/quicktime': ['.mov'], 'video/x-msvideo': ['.avi'], 'video/x-matroska': ['.mkv'], 'video/webm': ['.webm']}
     
+    @classmethod
+    def get_mime_type(cls, file_path: Path) -> str:
+        """Robust mime type guessing utilizing magic or mimetypes fallback"""
+        if _has_magic:
+            try:
+                return magic.Magic(mime=True).from_file(str(file_path))
+            except Exception:
+                pass
+        
+        # Fallback to standard library mimetypes
+        mime_type, _ = mimetypes.guess_type(str(file_path))
+        if not mime_type:
+            ext = file_path.suffix.lower()
+            for m, extensions in {**cls.AUDIO_FORMATS, **cls.VIDEO_FORMATS}.items():
+                if ext in extensions:
+                    return m
+            return 'application/octet-stream'
+        return mime_type
+
     @classmethod
     def validate_file(cls, file_path: Path, max_size_mb: int = 500) -> Tuple[bool, str]:
         if not file_path.exists(): return False, "File does not exist"
         if (file_path.stat().st_size / (1024 * 1024)) > max_size_mb: return False, f"File exceeds {max_size_mb}MB"
         
-        mime = magic.Magic(mime=True).from_file(str(file_path))
+        mime = cls.get_mime_type(file_path)
         formats = {**cls.AUDIO_FORMATS, **cls.VIDEO_FORMATS}
         
         if mime not in formats: return False, f"Unsupported format: {mime}"
@@ -45,11 +73,11 @@ class FileValidator:
 
     @classmethod
     def is_audio(cls, file_path: Path) -> bool:
-        return magic.Magic(mime=True).from_file(str(file_path)) in cls.AUDIO_FORMATS
+        return cls.get_mime_type(file_path) in cls.AUDIO_FORMATS
 
     @classmethod
     def is_video(cls, file_path: Path) -> bool:
-        return magic.Magic(mime=True).from_file(str(file_path)) in cls.VIDEO_FORMATS
+        return cls.get_mime_type(file_path) in cls.VIDEO_FORMATS
 
 class MetadataValidator:
     """Validate metadata fields"""
